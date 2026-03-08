@@ -16,14 +16,15 @@ It fetches issue data from Jira, prepares a temporary workspace with the issue c
 ### Install
 
 ```bash
-git clone https://github.com/yourusername/triager.git
-cd triager
+git clone https://github.com/codcod/maints-triage.git
+cd maints-triage
 go install .
 ```
 
 Verify installation:
 
 ```bash
+triage --version
 triage --help
 ```
 
@@ -32,17 +33,25 @@ triage --help
 If you prefer to build the binary without installing it to your `$GOPATH/bin`:
 
 ```bash
-git clone https://github.com/yourusername/triager.git
-cd triager
+git clone https://github.com/codcod/maints-triage.git
+cd maints-triage
 go build -o triage .
 ```
 
 This creates a `triage` binary in the current directory. You can then run it with `./triage`.
 
-You can also use `just`:
+You can also use `just`, which automatically stamps the binary with the current git tag:
 
 ```bash
 just build
+```
+
+The version embedded in the binary reflects the latest git tag (e.g. `v0.2.0`). Binaries built outside of a tagged commit show the tag plus a commit suffix (e.g. `v0.2.0-3-gabcdef`). Builds with no git context report `dev`.
+
+### Checking the Version
+
+```bash
+triage --version
 ```
 
 ## Configuration
@@ -64,6 +73,27 @@ The tool requires credentials for both Jira and Cursor. You can provide these vi
    CURSOR_API_KEY=your-cursor-api-key
    ```
 
+### Custom Field Mappings
+
+You can extract additional fields from Jira issues by creating a `fields-mapping.json` file in your triage configuration directory (e.g., `~/.config/triage/fields-mapping.json` or `$TRIAGE_HOME/fields-mapping.json`).
+
+The file should contain a JSON array of mappings, where each mapping has a `field` (display name) and a `path` (dot-notation path to the value in the Jira JSON response).
+
+Example `fields-mapping.json`:
+
+```json
+[
+  {
+    "field": "Customer Impact",
+    "path": "fields.customfield_12345.value"
+  },
+  {
+    "field": "Root Cause",
+    "path": "fields.customfield_67890"
+  }
+]
+```
+
 ## Usage
 
 ### Basic Triage
@@ -84,9 +114,11 @@ triage MAINT-123 MAINT-456 MAINT-789
 
 By default, `triage` looks for a checklist in the following order:
 
-1. Path passed via `--checklist`
-2. `$XDG_CONFIG_HOME/triage/checklist.md` (defaults to `~/.config/triage/checklist.md`)
-3. `./checklist.md` in the current directory
+1. Path passed via `--checklist` flag.
+2. `checklist.md` in the configuration directory:
+   - `$TRIAGE_HOME/checklist.md` (if `TRIAGE_HOME` is set)
+   - `$XDG_CONFIG_HOME/triage/checklist.md` (otherwise; defaults to `~/.config/triage/checklist.md`)
+3. `./checklist.md` in the current directory.
 
 To use an explicit checklist:
 

@@ -10,6 +10,9 @@ import (
 	"github.com/codcod/maints-triage/internal/triage"
 )
 
+// version is set at build time via -ldflags="-X main.version=<tag>".
+var version = "dev"
+
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -25,8 +28,9 @@ func newRootCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "triage <ISSUE-KEY> [ISSUE-KEY...]",
-		Short: "Triage Jira maintenance issues using cursor-agent",
+		Use:     "triage <ISSUE-KEY> [ISSUE-KEY...]",
+		Short:   "Triage Jira maintenance issues using cursor-agent",
+		Version: version,
 		Long: `triage fetches Jira maintenance issues and runs cursor-agent to verify
 completeness against a configurable checklist.
 
