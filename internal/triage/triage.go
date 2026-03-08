@@ -32,11 +32,13 @@ type Options struct {
 
 // Result holds the triage outcome for a single issue.
 type Result struct {
-	IssueKey  string    `json:"issue_key"`
-	Summary   string    `json:"summary"`
-	TriagedAt time.Time `json:"triaged_at"`
-	Report    string    `json:"report"`
-	Error     string    `json:"error,omitempty"`
+	IssueKey   string      `json:"issue_key"`
+	Summary    string      `json:"summary"`
+	TriagedAt  time.Time   `json:"triaged_at"`
+	Report     string      `json:"report"`
+	Evaluation *Evaluation `json:"evaluation,omitempty"`
+	Warnings   []string    `json:"warnings,omitempty"`
+	Error      string      `json:"error,omitempty"`
 }
 
 // triageDeps groups the resolved dependencies shared across triageOne calls.
@@ -221,7 +223,16 @@ func triageOne(ctx context.Context, key string, deps triageDeps, opts Options) R
 		return result
 	}
 
-	result.Report = agentOutput
+	// Attempt to parse structured JSON from the agent output.
+	// On success, render the report from the validated evaluation.
+	// On failure, degrade gracefully to the raw agent text.
+	if eval, _ := parseEvaluation(agentOutput); eval != nil {
+		result.Evaluation = eval
+		result.Report = renderEvaluationMarkdown(eval)
+		result.Warnings = validateEvaluation(eval)
+	} else {
+		result.Report = agentOutput
+	}
 
 	reportFile := filepath.Join(workDir, "report-"+key+".md")
 	if err := writeReport(reportFile, result); err != nil {
@@ -321,5 +332,14 @@ func printResult(w io.Writer, r Result, format string) {
 		fw.printf("ERROR: %s\n\n", r.Error)
 		return
 	}
+
 	fw.printf("%s\n\n", r.Report)
+
+	if len(r.Warnings) > 0 {
+		fw.printf("⚠️  Validation warnings:\n")
+		for _, warning := range r.Warnings {
+			fw.printf("  - %s\n", warning)
+		}
+		fw.printf("\n")
+	}
 }
