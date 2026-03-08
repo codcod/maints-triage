@@ -26,6 +26,7 @@ func newRootCmd() *cobra.Command {
 		promptPath    string
 		model         string
 		outputFormat  string
+		concurrency   int
 	)
 
 	cmd := &cobra.Command{
@@ -48,7 +49,8 @@ Optional environment variables:
   triage PROJ-123 PROJ-456
   triage --checklist ./custom-checklist.md PROJ-123
   triage --prompt ./custom-prompt.md PROJ-123
-  triage --model sonnet-4 --output json PROJ-123`,
+  triage --model sonnet-4 --output json PROJ-123
+  triage --concurrency 3 PROJ-123 PROJ-456 PROJ-789`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load()
@@ -61,6 +63,7 @@ Optional environment variables:
 				PromptPath:    promptPath,
 				Model:         model,
 				OutputFormat:  outputFormat,
+				Concurrency:   concurrency,
 			}, os.Stdout)
 		},
 	}
@@ -73,6 +76,8 @@ Optional environment variables:
 		"cursor-agent model to use (e.g. sonnet-4, gpt-5)")
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text",
 		`output format: text | json`)
+	cmd.Flags().IntVarP(&concurrency, "concurrency", "j", 0,
+		"max issues to triage in parallel (default 5)")
 
 	return cmd
 }

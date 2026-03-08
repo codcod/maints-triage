@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/codcod/maints-triage/internal/agent"
@@ -20,6 +21,7 @@ const (
 	defaultChecklistFile = "checklist.md"
 	defaultPromptFile    = "triage-prompt.md"
 	promptKeyPlaceholder = "{{ISSUE_KEY}}"
+	defaultConcurrency   = 5
 )
 
 // Options controls a triage run.
@@ -28,6 +30,7 @@ type Options struct {
 	PromptPath    string
 	Model         string
 	OutputFormat  string // "text" or "json"
+	Concurrency   int    // max parallel triageOne calls; 0 uses defaultConcurrency
 }
 
 // Result holds the triage outcome for a single issue.
@@ -170,15 +173,50 @@ func Run(ctx context.Context, issueKeys []string, cfg *config.Config, opts Optio
 		apiKey:         cfg.CursorAPIKey,
 	}
 
-	for _, key := range issueKeys {
-		key = strings.ToUpper(strings.TrimSpace(key))
-		_, _ = fmt.Fprintf(w, "Triaging %s...\n", key)
+	concurrency := opts.Concurrency
+	if concurrency <= 0 {
+		concurrency = defaultConcurrency
+	}
 
-		result := triageOne(ctx, key, deps, opts)
+	keys := make([]string, len(issueKeys))
+	for i, k := range issueKeys {
+		keys[i] = strings.ToUpper(strings.TrimSpace(k))
+	}
+
+	var mu sync.Mutex
+	results := runConcurrent(keys, concurrency, func(key string) Result {
+		mu.Lock()
+		_, _ = fmt.Fprintf(w, "Triaging %s...\n", key)
+		mu.Unlock()
+		return triageOne(ctx, key, deps, opts)
+	})
+
+	for _, result := range results {
 		printResult(w, result, opts.OutputFormat)
 	}
 
 	return nil
+}
+
+// runConcurrent fans out fn across keys with at most concurrency goroutines running
+// at any one time and returns results in the same order as keys.
+func runConcurrent(keys []string, concurrency int, fn func(string) Result) []Result {
+	results := make([]Result, len(keys))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i, key := range keys {
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(idx int, k string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			results[idx] = fn(k)
+		}(i, key)
+	}
+
+	wg.Wait()
+	return results
 }
 
 func triageOne(ctx context.Context, key string, deps triageDeps, opts Options) Result {

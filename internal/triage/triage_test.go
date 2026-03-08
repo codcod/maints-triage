@@ -3,9 +3,12 @@ package triage
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -321,5 +324,69 @@ func TestPrintResult_TextFormatWithError(t *testing.T) {
 	}
 	if strings.Contains(out, "\n\n\n") {
 		t.Error("expected no extra blank lines after error")
+	}
+}
+
+func TestRunConcurrent_OrderAndResults(t *testing.T) {
+	keys := []string{"A", "B", "C", "D", "E"}
+	results := runConcurrent(keys, 3, func(key string) Result {
+		return Result{IssueKey: key}
+	})
+
+	if len(results) != len(keys) {
+		t.Fatalf("got %d results, want %d", len(results), len(keys))
+	}
+	for i, r := range results {
+		if r.IssueKey != keys[i] {
+			t.Errorf("results[%d].IssueKey = %q, want %q", i, r.IssueKey, keys[i])
+		}
+	}
+}
+
+func TestRunConcurrent_BoundsConcurrency(t *testing.T) {
+	const cap = 3
+	keys := make([]string, 9)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("KEY-%d", i)
+	}
+
+	var active atomic.Int64
+	var mu sync.Mutex
+	var maxSeen int64
+
+	runConcurrent(keys, cap, func(key string) Result {
+		cur := active.Add(1)
+		mu.Lock()
+		if cur > maxSeen {
+			maxSeen = cur
+		}
+		mu.Unlock()
+		time.Sleep(20 * time.Millisecond)
+		active.Add(-1)
+		return Result{IssueKey: key}
+	})
+
+	if maxSeen > cap {
+		t.Errorf("peak concurrency = %d, want <= %d", maxSeen, cap)
+	}
+	if maxSeen < 2 {
+		t.Errorf("peak concurrency = %d; worker pool not utilized", maxSeen)
+	}
+}
+
+func TestRunConcurrent_SingleWorker(t *testing.T) {
+	keys := []string{"X", "Y", "Z"}
+	var order []string
+	var mu sync.Mutex
+
+	runConcurrent(keys, 1, func(key string) Result {
+		mu.Lock()
+		order = append(order, key)
+		mu.Unlock()
+		return Result{IssueKey: key}
+	})
+
+	if len(order) != len(keys) {
+		t.Fatalf("got %d calls, want %d", len(order), len(keys))
 	}
 }
