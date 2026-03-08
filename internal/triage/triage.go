@@ -31,28 +31,42 @@ type Result struct {
 	Error     string    `json:"error,omitempty"`
 }
 
+// triageHome returns the triage configuration directory, in priority order:
+//  1. $TRIAGE_HOME if set
+//  2. $XDG_CONFIG_HOME/triage  (falls back to ~/.config/triage)
+func triageHome() (string, error) {
+	if th := os.Getenv("TRIAGE_HOME"); th != "" {
+		return th, nil
+	}
+	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfigHome == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home directory: %w", err)
+		}
+		xdgConfigHome = filepath.Join(home, ".config")
+	}
+	return filepath.Join(xdgConfigHome, "triage"), nil
+}
+
 // resolveChecklist returns the checklist path to use, in priority order:
 //  1. explicit --checklist flag value
-//  2. $XDG_CONFIG_HOME/triage/checklist.md  (falls back to ~/.config/triage/checklist.md)
+//  2. $TRIAGE_HOME/checklist.md  (defaults to $XDG_CONFIG_HOME/triage/checklist.md)
 //  3. ./checklist.md
 func resolveChecklist(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
 
-	xdgConfigHome := os.Getenv("XDG_CONFIG_HOME")
-	if xdgConfigHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve XDG_CONFIG_HOME: %w", err)
-		}
-		xdgConfigHome = filepath.Join(home, ".config")
+	th, err := triageHome()
+	if err != nil {
+		return "", err
 	}
-	xdgPath := filepath.Join(xdgConfigHome, "triage", "checklist.md")
-	if _, err := os.Stat(xdgPath); err == nil {
-		return xdgPath, nil
+	thPath := filepath.Join(th, "checklist.md")
+	if _, err := os.Stat(thPath); err == nil {
+		return thPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("stat %q: %w", xdgPath, err)
+		return "", fmt.Errorf("stat %q: %w", thPath, err)
 	}
 
 	return "checklist.md", nil

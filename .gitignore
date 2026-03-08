@@ -3,6 +3,7 @@
 
 # Environment
 .env
+.link-to-xdg-config-home
 
 # Triage workspace output
 triaged-maints/
