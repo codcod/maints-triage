@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -230,7 +231,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		issue, err := client.FetchIssue("MAINT-123", nil)
+		issue, err := client.FetchIssue(context.Background(), "MAINT-123", nil)
 		if err != nil {
 			t.Fatalf("FetchIssue() unexpected error: %v", err)
 		}
@@ -286,7 +287,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "secret")
-		_, _ = client.FetchIssue("X-1", nil)
+		_, _ = client.FetchIssue(context.Background(), "X-1", nil)
 
 		if gotAuth == "" || gotAuth[:6] != "Basic " {
 			t.Errorf("expected Basic auth header, got %q", gotAuth)
@@ -301,7 +302,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		_, err := client.FetchIssue("MISSING-1", nil)
+		_, err := client.FetchIssue(context.Background(), "MISSING-1", nil)
 		if err == nil {
 			t.Error("FetchIssue() should return error for 404 response")
 		}
@@ -315,7 +316,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		_, err := client.FetchIssue("MAINT-1", nil)
+		_, err := client.FetchIssue(context.Background(), "MAINT-1", nil)
 		if err == nil {
 			t.Error("FetchIssue() should return error for invalid JSON")
 		}
@@ -354,7 +355,7 @@ func TestFetchIssue(t *testing.T) {
 		}
 
 		client := NewClient(srv.URL, "user", "token")
-		issue, err := client.FetchIssue("MAINT-42", mappings)
+		issue, err := client.FetchIssue(context.Background(), "MAINT-42", mappings)
 		if err != nil {
 			t.Fatalf("FetchIssue() unexpected error: %v", err)
 		}
@@ -407,7 +408,7 @@ func TestFetchIssue(t *testing.T) {
 		}
 
 		client := NewClient(srv.URL, "user", "token")
-		issue, err := client.FetchIssue("MAINT-43", mappings)
+		issue, err := client.FetchIssue(context.Background(), "MAINT-43", mappings)
 		if err != nil {
 			t.Fatalf("FetchIssue() unexpected error: %v", err)
 		}

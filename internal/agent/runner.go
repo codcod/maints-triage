@@ -2,6 +2,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -24,14 +25,13 @@ type jsonResponse struct {
 
 // Run invokes cursor-agent in headless (--print) mode with the given prompt and workspace.
 // It returns the text content of the agent's response.
-func Run(prompt string, opts Options) (string, error) {
+// The API key is passed via the CURSOR_API_KEY environment variable to avoid
+// exposing it in the process argument list.
+func Run(ctx context.Context, prompt string, opts Options) (string, error) {
 	args := []string{
 		"--print",
 		"--output-format", "json",
 		"--force", // auto-trust the workspace directory
-	}
-	if opts.APIKey != "" {
-		args = append(args, "--api-key", opts.APIKey)
 	}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
@@ -41,7 +41,10 @@ func Run(prompt string, opts Options) (string, error) {
 	}
 	args = append(args, prompt)
 
-	cmd := exec.Command("cursor-agent", args...)
+	cmd := exec.CommandContext(ctx, "cursor-agent", args...)
+	if opts.APIKey != "" {
+		cmd.Env = append(cmd.Environ(), "CURSOR_API_KEY="+opts.APIKey)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

@@ -1,6 +1,7 @@
 package triage
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +37,15 @@ type Result struct {
 	TriagedAt time.Time `json:"triaged_at"`
 	Report    string    `json:"report"`
 	Error     string    `json:"error,omitempty"`
+}
+
+// triageDeps groups the resolved dependencies shared across triageOne calls.
+type triageDeps struct {
+	checklistData  []byte
+	promptTemplate []byte
+	mappings       []jira.FieldMapping
+	jiraClient     *jira.Client
+	apiKey         string
 }
 
 // triageHome returns the triage configuration directory, in priority order:
@@ -118,7 +128,13 @@ func resolvePrompt(explicit string) (string, error) {
 }
 
 // Run triages one or more Jira issues and writes results to w.
-func Run(issueKeys []string, cfg *config.Config, opts Options, w io.Writer) error {
+func Run(ctx context.Context, issueKeys []string, cfg *config.Config, opts Options, w io.Writer) error {
+	switch opts.OutputFormat {
+	case "text", "json", "":
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", opts.OutputFormat)
+	}
+
 	checklistPath, err := resolveChecklist(opts.ChecklistPath)
 	if err != nil {
 		return err
@@ -144,26 +160,32 @@ func Run(issueKeys []string, cfg *config.Config, opts Options, w io.Writer) erro
 		return err
 	}
 
-	jiraClient := jira.NewClient(cfg.JiraURL, cfg.JiraUsername, cfg.JiraAPIToken)
+	deps := triageDeps{
+		checklistData:  checklistData,
+		promptTemplate: promptTemplate,
+		mappings:       mappings,
+		jiraClient:     jira.NewClient(cfg.JiraURL, cfg.JiraUsername, cfg.JiraAPIToken),
+		apiKey:         cfg.CursorAPIKey,
+	}
 
 	for _, key := range issueKeys {
 		key = strings.ToUpper(strings.TrimSpace(key))
 		_, _ = fmt.Fprintf(w, "Triaging %s...\n", key)
 
-		result := triageOne(key, checklistData, promptTemplate, mappings, jiraClient, cfg.CursorAPIKey, opts)
+		result := triageOne(ctx, key, deps, opts)
 		printResult(w, result, opts.OutputFormat)
 	}
 
 	return nil
 }
 
-func triageOne(key string, checklistData []byte, promptTemplate []byte, mappings []jira.FieldMapping, jiraClient *jira.Client, apiKey string, opts Options) Result {
+func triageOne(ctx context.Context, key string, deps triageDeps, opts Options) Result {
 	result := Result{
 		IssueKey:  key,
 		TriagedAt: time.Now(),
 	}
 
-	issue, err := jiraClient.FetchIssue(key, mappings)
+	issue, err := deps.jiraClient.FetchIssue(ctx, key, deps.mappings)
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to fetch issue: %s", err)
 		return result
@@ -183,14 +205,14 @@ func triageOne(key string, checklistData []byte, promptTemplate []byte, mappings
 	}
 
 	checklistDst := filepath.Join(workDir, defaultChecklistFile)
-	if err := os.WriteFile(checklistDst, checklistData, 0o644); err != nil {
+	if err := os.WriteFile(checklistDst, deps.checklistData, 0o644); err != nil {
 		result.Error = fmt.Sprintf("write checklist file: %s", err)
 		return result
 	}
 
-	prompt := strings.ReplaceAll(string(promptTemplate), promptKeyPlaceholder, key)
-	agentOutput, err := agent.Run(prompt, agent.Options{
-		APIKey:    apiKey,
+	prompt := strings.ReplaceAll(string(deps.promptTemplate), promptKeyPlaceholder, key)
+	agentOutput, err := agent.Run(ctx, prompt, agent.Options{
+		APIKey:    deps.apiKey,
 		Model:     opts.Model,
 		Workspace: workDir,
 	})
@@ -203,7 +225,6 @@ func triageOne(key string, checklistData []byte, promptTemplate []byte, mappings
 
 	reportFile := filepath.Join(workDir, "report-"+key+".md")
 	if err := writeReport(reportFile, result); err != nil {
-		// Non-fatal: report was already captured in result.Report
 		result.Error = fmt.Sprintf("write report file: %s", err)
 	}
 
@@ -236,7 +257,10 @@ func writeReport(path string, r Result) error {
 	fw.printf("**Triaged at:** %s\n\n", r.TriagedAt.Format(time.RFC3339))
 	fw.printf("---\n\n")
 	fw.printf("%s\n", r.Report)
-	return fw.err
+	if fw.err != nil {
+		return fw.err
+	}
+	return f.Close()
 }
 
 func writeIssueMarkdown(path string, issue *jira.Issue) error {
@@ -272,7 +296,10 @@ func writeIssueMarkdown(path string, issue *jira.Issue) error {
 			fw.printf("### %s (%s)\n\n%s\n\n", c.Author, c.Created, c.Body)
 		}
 	}
-	return fw.err
+	if fw.err != nil {
+		return fw.err
+	}
+	return f.Close()
 }
 
 func printResult(w io.Writer, r Result, format string) {

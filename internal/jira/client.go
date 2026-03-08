@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -108,14 +109,14 @@ type issueResponse struct {
 // FetchIssue retrieves a Jira issue by key, including all fields and comments.
 // mappings is an optional list of extra fields to resolve from the raw JSON; if
 // nil or empty the extra-fields section of the returned Issue will be empty.
-func (c *Client) FetchIssue(key string, mappings []FieldMapping) (*Issue, error) {
+func (c *Client) FetchIssue(ctx context.Context, key string, mappings []FieldMapping) (*Issue, error) {
 	baseFields := "summary,description,status,priority,reporter,assignee,components,versions,fixVersions,labels,comment"
 	if extra := customFieldIDs(mappings); len(extra) > 0 {
 		baseFields += "," + strings.Join(extra, ",")
 	}
 	url := fmt.Sprintf("%s/rest/api/3/issue/%s?expand=renderedFields&fields=%s", c.baseURL, key, baseFields)
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -153,8 +154,8 @@ func (c *Client) FetchIssue(key string, mappings []FieldMapping) (*Issue, error)
 		Labels:      raw.Fields.Labels,
 	}
 
-	for _, c := range raw.Fields.Components {
-		issue.Components = append(issue.Components, c.Name)
+	for _, comp := range raw.Fields.Components {
+		issue.Components = append(issue.Components, comp.Name)
 	}
 	for _, v := range raw.Fields.Versions {
 		issue.AffectedVersions = append(issue.AffectedVersions, v.Name)
@@ -162,16 +163,15 @@ func (c *Client) FetchIssue(key string, mappings []FieldMapping) (*Issue, error)
 	for _, v := range raw.Fields.FixVersions {
 		issue.FixVersions = append(issue.FixVersions, v.Name)
 	}
-	for _, c := range raw.Fields.Comment.Comments {
+	for _, cm := range raw.Fields.Comment.Comments {
 		issue.Comments = append(issue.Comments, Comment{
-			Author:  c.Author.DisplayName,
-			Created: c.Created,
-			Body:    extractText(c.Body),
+			Author:  cm.Author.DisplayName,
+			Created: cm.Created,
+			Body:    extractText(cm.Body),
 		})
 	}
 
 	if len(mappings) > 0 {
-		// Unmarshal into a generic map so we can navigate arbitrary paths.
 		var rawMap map[string]any
 		if err := json.Unmarshal(body, &rawMap); err == nil {
 			for _, m := range mappings {
