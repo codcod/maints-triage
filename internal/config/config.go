@@ -1,8 +1,9 @@
 package config
 
 import (
-	"errors"
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -45,11 +46,7 @@ func (c *Config) validate() error {
 		missing = append(missing, "CURSOR_API_KEY")
 	}
 	if len(missing) > 0 {
-		msg := "missing required environment variables:"
-		for _, v := range missing {
-			msg += "\n  " + v
-		}
-		return errors.New(msg)
+		return fmt.Errorf("missing required environment variables:\n  %s", strings.Join(missing, "\n  "))
 	}
 	return nil
 }

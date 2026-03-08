@@ -56,7 +56,7 @@ Optional environment variables:
 				return err
 			}
 
-			return triage.Run(args, cfg, triage.Options{
+			return triage.Run(cmd.Context(), args, cfg, triage.Options{
 				ChecklistPath: checklistPath,
 				PromptPath:    promptPath,
 				Model:         model,
