@@ -12,6 +12,32 @@ import (
 	"github.com/codcod/maints-triage/internal/jira"
 )
 
+func TestTriageHome(t *testing.T) {
+	t.Run("TRIAGE_HOME used when set", func(t *testing.T) {
+		t.Setenv("TRIAGE_HOME", "/custom/triage")
+		got, err := triageHome()
+		if err != nil {
+			t.Fatalf("triageHome() error = %v", err)
+		}
+		if got != "/custom/triage" {
+			t.Errorf("got %q, want %q", got, "/custom/triage")
+		}
+	})
+
+	t.Run("falls back to XDG_CONFIG_HOME/triage", func(t *testing.T) {
+		t.Setenv("TRIAGE_HOME", "")
+		t.Setenv("XDG_CONFIG_HOME", "/xdg/config")
+		got, err := triageHome()
+		if err != nil {
+			t.Fatalf("triageHome() error = %v", err)
+		}
+		want := filepath.Join("/xdg/config", "triage")
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
 func TestResolveChecklist(t *testing.T) {
 	t.Run("explicit path returned as-is", func(t *testing.T) {
 		got, err := resolveChecklist("/some/explicit/checklist.md")
@@ -23,7 +49,55 @@ func TestResolveChecklist(t *testing.T) {
 		}
 	})
 
-	t.Run("XDG path used when file exists", func(t *testing.T) {
+	t.Run("TRIAGE_HOME used when set and file exists", func(t *testing.T) {
+		tmp := t.TempDir()
+		checklistPath := filepath.Join(tmp, "checklist.md")
+		if err := os.WriteFile(checklistPath, []byte("# TRIAGE_HOME checklist"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("TRIAGE_HOME", tmp)
+
+		got, err := resolveChecklist("")
+		if err != nil {
+			t.Fatalf("resolveChecklist() error = %v", err)
+		}
+		if got != checklistPath {
+			t.Errorf("got %q, want %q", got, checklistPath)
+		}
+	})
+
+	t.Run("TRIAGE_HOME takes priority over XDG_CONFIG_HOME", func(t *testing.T) {
+		tmp := t.TempDir()
+		triageHomeDir := filepath.Join(tmp, "triage-home")
+		if err := os.MkdirAll(triageHomeDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		triageChecklist := filepath.Join(triageHomeDir, "checklist.md")
+		if err := os.WriteFile(triageChecklist, []byte("# TRIAGE_HOME"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		xdgDir := filepath.Join(tmp, "xdg", "triage")
+		if err := os.MkdirAll(xdgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(xdgDir, "checklist.md"), []byte("# XDG"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Setenv("TRIAGE_HOME", triageHomeDir)
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
+
+		got, err := resolveChecklist("")
+		if err != nil {
+			t.Fatalf("resolveChecklist() error = %v", err)
+		}
+		if got != triageChecklist {
+			t.Errorf("got %q, want %q", got, triageChecklist)
+		}
+	})
+
+	t.Run("XDG path used when file exists and TRIAGE_HOME is unset", func(t *testing.T) {
 		tmp := t.TempDir()
 		xdgDir := filepath.Join(tmp, "triage")
 		if err := os.MkdirAll(xdgDir, 0o755); err != nil {
@@ -33,6 +107,7 @@ func TestResolveChecklist(t *testing.T) {
 		if err := os.WriteFile(checklistPath, []byte("# XDG checklist"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		t.Setenv("TRIAGE_HOME", "")
 		t.Setenv("XDG_CONFIG_HOME", tmp)
 
 		got, err := resolveChecklist("")
@@ -44,7 +119,8 @@ func TestResolveChecklist(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to ./checklist.md when XDG file absent", func(t *testing.T) {
+	t.Run("falls back to ./checklist.md when no config file found", func(t *testing.T) {
+		t.Setenv("TRIAGE_HOME", "")
 		t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
 		got, err := resolveChecklist("")

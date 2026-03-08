@@ -34,7 +34,11 @@ Required environment variables (or .env file):
   JIRA_URL         Base URL of your Jira instance (e.g. https://acme.atlassian.net)
   JIRA_USERNAME    Jira account email
   JIRA_API_TOKEN   Jira API token
-  CURSOR_API_KEY   cursor-agent API key`,
+  CURSOR_API_KEY   cursor-agent API key
+
+Optional environment variables:
+  TRIAGE_HOME      Directory for triage configuration files
+                   (default: $XDG_CONFIG_HOME/triage, or ~/.config/triage)`,
 		Example: `  triage PROJ-123
   triage PROJ-123 PROJ-456
   triage --checklist ./custom-checklist.md PROJ-123
