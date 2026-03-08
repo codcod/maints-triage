@@ -135,7 +135,11 @@ func TestResolveChecklist(t *testing.T) {
 
 func TestBuildPrompt(t *testing.T) {
 	key := "MAINT-42"
-	prompt := buildPrompt(key)
+	template := `Read the file "issue-{{ISSUE_KEY}}.md" and evaluate it against each item in "checklist.md".
+  ✅ Complete
+  ❌ Missing
+PASS or FAIL verdict.`
+	prompt := strings.ReplaceAll(template, promptKeyPlaceholder, key)
 
 	if !strings.Contains(prompt, "issue-MAINT-42.md") {
 		t.Errorf("prompt should reference the issue file, got: %s", prompt)

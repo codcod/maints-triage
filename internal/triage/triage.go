@@ -15,11 +15,16 @@ import (
 	"github.com/codcod/maints-triage/internal/jira"
 )
 
-const defaultChecklistFile = "checklist.md"
+const (
+	defaultChecklistFile = "checklist.md"
+	defaultPromptFile    = "triage-prompt.md"
+	promptKeyPlaceholder = "{{ISSUE_KEY}}"
+)
 
 // Options controls a triage run.
 type Options struct {
 	ChecklistPath string
+	PromptPath    string
 	Model         string
 	OutputFormat  string // "text" or "json"
 }
@@ -73,11 +78,11 @@ func loadFieldsMappings() ([]jira.FieldMapping, error) {
 	return mappings, nil
 }
 
-// resolveChecklist returns the checklist path to use, in priority order:
-//  1. explicit --checklist flag value
-//  2. $TRIAGE_HOME/checklist.md  (defaults to $XDG_CONFIG_HOME/triage/checklist.md)
-//  3. ./checklist.md
-func resolveChecklist(explicit string) (string, error) {
+// resolveConfigFile returns the path for a named config file, in priority order:
+//  1. explicit override value (non-empty)
+//  2. $TRIAGE_HOME/<name>  (defaults to $XDG_CONFIG_HOME/triage/<name>)
+//  3. ./<name>
+func resolveConfigFile(explicit, name string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
@@ -86,14 +91,30 @@ func resolveChecklist(explicit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	thPath := filepath.Join(th, defaultChecklistFile)
+	thPath := filepath.Join(th, name)
 	if _, err := os.Stat(thPath); err == nil {
 		return thPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat %q: %w", thPath, err)
 	}
 
-	return defaultChecklistFile, nil
+	return name, nil
+}
+
+// resolveChecklist returns the checklist path to use, in priority order:
+//  1. explicit --checklist flag value
+//  2. $TRIAGE_HOME/checklist.md  (defaults to $XDG_CONFIG_HOME/triage/checklist.md)
+//  3. ./checklist.md
+func resolveChecklist(explicit string) (string, error) {
+	return resolveConfigFile(explicit, defaultChecklistFile)
+}
+
+// resolvePrompt returns the prompt template path to use, in priority order:
+//  1. explicit --prompt flag value
+//  2. $TRIAGE_HOME/triage-prompt.md  (defaults to $XDG_CONFIG_HOME/triage/triage-prompt.md)
+//  3. ./triage-prompt.md
+func resolvePrompt(explicit string) (string, error) {
+	return resolveConfigFile(explicit, defaultPromptFile)
 }
 
 // Run triages one or more Jira issues and writes results to w.
@@ -108,6 +129,16 @@ func Run(issueKeys []string, cfg *config.Config, opts Options, w io.Writer) erro
 		return fmt.Errorf("read checklist %q: %w", checklistPath, err)
 	}
 
+	promptPath, err := resolvePrompt(opts.PromptPath)
+	if err != nil {
+		return err
+	}
+
+	promptTemplate, err := os.ReadFile(promptPath)
+	if err != nil {
+		return fmt.Errorf("read prompt %q: %w", promptPath, err)
+	}
+
 	mappings, err := loadFieldsMappings()
 	if err != nil {
 		return err
@@ -119,14 +150,14 @@ func Run(issueKeys []string, cfg *config.Config, opts Options, w io.Writer) erro
 		key = strings.ToUpper(strings.TrimSpace(key))
 		_, _ = fmt.Fprintf(w, "Triaging %s...\n", key)
 
-		result := triageOne(key, checklistData, mappings, jiraClient, cfg.CursorAPIKey, opts)
+		result := triageOne(key, checklistData, promptTemplate, mappings, jiraClient, cfg.CursorAPIKey, opts)
 		printResult(w, result, opts.OutputFormat)
 	}
 
 	return nil
 }
 
-func triageOne(key string, checklistData []byte, mappings []jira.FieldMapping, jiraClient *jira.Client, apiKey string, opts Options) Result {
+func triageOne(key string, checklistData []byte, promptTemplate []byte, mappings []jira.FieldMapping, jiraClient *jira.Client, apiKey string, opts Options) Result {
 	result := Result{
 		IssueKey:  key,
 		TriagedAt: time.Now(),
@@ -157,7 +188,8 @@ func triageOne(key string, checklistData []byte, mappings []jira.FieldMapping, j
 		return result
 	}
 
-	agentOutput, err := agent.Run(buildPrompt(key), agent.Options{
+	prompt := strings.ReplaceAll(string(promptTemplate), promptKeyPlaceholder, key)
+	agentOutput, err := agent.Run(prompt, agent.Options{
 		APIKey:    apiKey,
 		Model:     opts.Model,
 		Workspace: workDir,
@@ -205,25 +237,6 @@ func writeReport(path string, r Result) error {
 	fw.printf("---\n\n")
 	fw.printf("%s\n", r.Report)
 	return fw.err
-}
-
-// buildPrompt returns the triage prompt for the given issue key.
-func buildPrompt(key string) string {
-	return fmt.Sprintf(
-		`Read the file "issue-%s.md" and evaluate it against each item in "checklist.md".
-
-For each checklist item, provide one of:
-  ✅ Complete   – the issue clearly addresses this requirement
-  ⚠️  Partial   – something is mentioned but it is incomplete or ambiguous
-  ❌ Missing    – no information provided for this requirement
-
-After evaluating all items, provide:
-- A brief summary of what is missing or needs improvement
-- An overall verdict: PASS (all items complete) or FAIL (one or more items missing/partial)
-
-Be concise and specific. Reference the actual content from the issue when justifying each status.`,
-		key,
-	)
 }
 
 func writeIssueMarkdown(path string, issue *jira.Issue) error {

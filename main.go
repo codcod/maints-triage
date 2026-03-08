@@ -23,6 +23,7 @@ func main() {
 func newRootCmd() *cobra.Command {
 	var (
 		checklistPath string
+		promptPath    string
 		model         string
 		outputFormat  string
 	)
@@ -46,6 +47,7 @@ Optional environment variables:
 		Example: `  triage PROJ-123
   triage PROJ-123 PROJ-456
   triage --checklist ./custom-checklist.md PROJ-123
+  triage --prompt ./custom-prompt.md PROJ-123
   triage --model sonnet-4 --output json PROJ-123`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -56,6 +58,7 @@ Optional environment variables:
 
 			return triage.Run(args, cfg, triage.Options{
 				ChecklistPath: checklistPath,
+				PromptPath:    promptPath,
 				Model:         model,
 				OutputFormat:  outputFormat,
 			}, os.Stdout)
@@ -64,6 +67,8 @@ Optional environment variables:
 
 	cmd.Flags().StringVarP(&checklistPath, "checklist", "c", "",
 		`path to the checklist Markdown file (default: "./checklist.md")`)
+	cmd.Flags().StringVarP(&promptPath, "prompt", "p", "",
+		`path to the prompt template Markdown file (default: "./triage-prompt.md")`)
 	cmd.Flags().StringVar(&model, "model", "",
 		"cursor-agent model to use (e.g. sonnet-4, gpt-5)")
 	cmd.Flags().StringVarP(&outputFormat, "output", "o", "text",
