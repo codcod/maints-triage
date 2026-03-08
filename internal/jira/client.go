@@ -27,6 +27,19 @@ func NewClient(baseURL, username, apiToken string) *Client {
 	}
 }
 
+// FieldMapping maps a human-readable field name to a dot-notation path in the
+// Jira JSON response (e.g. "fields.customfield_20320.value").
+type FieldMapping struct {
+	Field string `json:"field"`
+	Path  string `json:"path"`
+}
+
+// FieldValue is a resolved field name / value pair extracted via a FieldMapping.
+type FieldValue struct {
+	Field string
+	Value string
+}
+
 // Issue holds the fields we extract from a Jira issue for triage.
 type Issue struct {
 	Key              string
@@ -37,12 +50,12 @@ type Issue struct {
 	Reporter         string
 	Assignee         string
 	Components       []string
-	Customers        string
 	AffectedVersions []string
 	FixVersions      []string
 	Labels           []string
 	Comments         []Comment
-	RawFields        map[string]any
+	// ExtraFields contains values resolved from a FieldMapping slice, in mapping order.
+	ExtraFields []FieldValue
 }
 
 type Comment struct {
@@ -89,13 +102,18 @@ type issueResponse struct {
 				Body    any    `json:"body"` // ADF or plain string
 			} `json:"comments"`
 		} `json:"comment"`
-		CustomFields map[string]any `json:"-"`
 	} `json:"fields"`
 }
 
 // FetchIssue retrieves a Jira issue by key, including all fields and comments.
-func (c *Client) FetchIssue(key string) (*Issue, error) {
-	url := fmt.Sprintf("%s/rest/api/3/issue/%s?expand=renderedFields&fields=summary,description,status,priority,reporter,assignee,components,versions,fixVersions,labels,comment,customfield_10001,customfield_10002", c.baseURL, key)
+// mappings is an optional list of extra fields to resolve from the raw JSON; if
+// nil or empty the extra-fields section of the returned Issue will be empty.
+func (c *Client) FetchIssue(key string, mappings []FieldMapping) (*Issue, error) {
+	baseFields := "summary,description,status,priority,reporter,assignee,components,versions,fixVersions,labels,comment"
+	if extra := customFieldIDs(mappings); len(extra) > 0 {
+		baseFields += "," + strings.Join(extra, ",")
+	}
+	url := fmt.Sprintf("%s/rest/api/3/issue/%s?expand=renderedFields&fields=%s", c.baseURL, key, baseFields)
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -124,14 +142,6 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 		return nil, fmt.Errorf("parse response: %w", err)
 	}
 
-	// Also unmarshal the full fields map so we can surface any custom fields
-	var fullDoc map[string]any
-	if err := json.Unmarshal(body, &fullDoc); err == nil {
-		if fields, ok := fullDoc["fields"].(map[string]any); ok {
-			raw.Fields.CustomFields = fields
-		}
-	}
-
 	issue := &Issue{
 		Key:         raw.Key,
 		Summary:     raw.Fields.Summary,
@@ -141,7 +151,6 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 		Reporter:    raw.Fields.Reporter.DisplayName,
 		Assignee:    raw.Fields.Assignee.DisplayName,
 		Labels:      raw.Fields.Labels,
-		RawFields:   raw.Fields.CustomFields,
 	}
 
 	for _, c := range raw.Fields.Components {
@@ -161,12 +170,69 @@ func (c *Client) FetchIssue(key string) (*Issue, error) {
 		})
 	}
 
-	// Try to extract the Customers custom field (commonly customfield_10001 or similar)
-	if cf, ok := raw.Fields.CustomFields["customfield_10001"]; ok && cf != nil {
-		issue.Customers = fmt.Sprintf("%v", cf)
+	if len(mappings) > 0 {
+		// Unmarshal into a generic map so we can navigate arbitrary paths.
+		var rawMap map[string]any
+		if err := json.Unmarshal(body, &rawMap); err == nil {
+			for _, m := range mappings {
+				issue.ExtraFields = append(issue.ExtraFields, FieldValue{
+					Field: m.Field,
+					Value: getByPath(rawMap, m.Path),
+				})
+			}
+		}
 	}
 
 	return issue, nil
+}
+
+// customFieldIDs extracts unique Jira custom-field IDs (e.g. "customfield_20320")
+// from the dot-notation paths in a mapping slice.
+func customFieldIDs(mappings []FieldMapping) []string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, m := range mappings {
+		for _, segment := range strings.Split(m.Path, ".") {
+			if strings.HasPrefix(segment, "customfield_") && !seen[segment] {
+				seen[segment] = true
+				ids = append(ids, segment)
+			}
+		}
+	}
+	return ids
+}
+
+// getByPath walks a dot-separated path through a nested map[string]any.
+// When a JSON array is encountered mid-walk the remaining path is applied to
+// every element and the results are joined with ", " — this correctly handles
+// multi-value Jira custom fields (e.g. customfield_20945 is an array of option
+// objects, each with a "value" key).
+func getByPath(data map[string]any, path string) string {
+	return walkPath(data, strings.Split(path, "."))
+}
+
+func walkPath(current any, segments []string) string {
+	if len(segments) == 0 {
+		if current == nil {
+			return ""
+		}
+		return fmt.Sprintf("%v", current)
+	}
+	// Array: apply remaining segments to every element, join non-empty results.
+	if arr, ok := current.([]any); ok {
+		var parts []string
+		for _, elem := range arr {
+			if v := walkPath(elem, segments); v != "" {
+				parts = append(parts, v)
+			}
+		}
+		return strings.Join(parts, ", ")
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		return ""
+	}
+	return walkPath(m[segments[0]], segments[1:])
 }
 
 // extractText converts an Atlassian Document Format (ADF) node or plain string to plain text.

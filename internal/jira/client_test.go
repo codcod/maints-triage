@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -229,7 +230,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		issue, err := client.FetchIssue("MAINT-123")
+		issue, err := client.FetchIssue("MAINT-123", nil)
 		if err != nil {
 			t.Fatalf("FetchIssue() unexpected error: %v", err)
 		}
@@ -285,7 +286,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "secret")
-		_, _ = client.FetchIssue("X-1")
+		_, _ = client.FetchIssue("X-1", nil)
 
 		if gotAuth == "" || gotAuth[:6] != "Basic " {
 			t.Errorf("expected Basic auth header, got %q", gotAuth)
@@ -300,7 +301,7 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		_, err := client.FetchIssue("MISSING-1")
+		_, err := client.FetchIssue("MISSING-1", nil)
 		if err == nil {
 			t.Error("FetchIssue() should return error for 404 response")
 		}
@@ -314,9 +315,108 @@ func TestFetchIssue(t *testing.T) {
 		defer srv.Close()
 
 		client := NewClient(srv.URL, "user", "token")
-		_, err := client.FetchIssue("MAINT-1")
+		_, err := client.FetchIssue("MAINT-1", nil)
 		if err == nil {
 			t.Error("FetchIssue() should return error for invalid JSON")
+		}
+	})
+
+	t.Run("field mappings are resolved via dot-notation path", func(t *testing.T) {
+		// customfield_20945 uses the real Jira shape: an array of option objects.
+		payload := map[string]any{
+			"key": "MAINT-42",
+			"fields": map[string]any{
+				"summary":  "Mapping test",
+				"status":   map[string]any{"name": "Open"},
+				"priority": map[string]any{"name": "Low"},
+				"customfield_20320": map[string]any{
+					"value": "Storage",
+					"child": map[string]any{"value": "Block"},
+				},
+				"customfield_20945": []any{
+					map[string]any{"value": "Acme Corp"},
+				},
+			},
+		}
+
+		var capturedURL string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			capturedURL = r.URL.RawQuery
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(payload)
+		}))
+		defer srv.Close()
+
+		mappings := []FieldMapping{
+			{Field: "Maint Component", Path: "fields.customfield_20320.value"},
+			{Field: "Maint Sub-component", Path: "fields.customfield_20320.child.value"},
+			{Field: "Customers", Path: "fields.customfield_20945.value"},
+		}
+
+		client := NewClient(srv.URL, "user", "token")
+		issue, err := client.FetchIssue("MAINT-42", mappings)
+		if err != nil {
+			t.Fatalf("FetchIssue() unexpected error: %v", err)
+		}
+
+		// Custom field IDs should appear in the request URL.
+		for _, id := range []string{"customfield_20320", "customfield_20945"} {
+			if !strings.Contains(capturedURL, id) {
+				t.Errorf("expected %q in request URL query %q", id, capturedURL)
+			}
+		}
+
+		if len(issue.ExtraFields) != 3 {
+			t.Fatalf("ExtraFields len = %d, want 3", len(issue.ExtraFields))
+		}
+		want := []FieldValue{
+			{Field: "Maint Component", Value: "Storage"},
+			{Field: "Maint Sub-component", Value: "Block"},
+			{Field: "Customers", Value: "Acme Corp"},
+		}
+		for i, w := range want {
+			got := issue.ExtraFields[i]
+			if got.Field != w.Field || got.Value != w.Value {
+				t.Errorf("ExtraFields[%d] = {%q, %q}, want {%q, %q}", i, got.Field, got.Value, w.Field, w.Value)
+			}
+		}
+	})
+
+	t.Run("field mapping with multiple array elements joins values", func(t *testing.T) {
+		payload := map[string]any{
+			"key": "MAINT-43",
+			"fields": map[string]any{
+				"summary":  "Multi-customer test",
+				"status":   map[string]any{"name": "Open"},
+				"priority": map[string]any{"name": "Low"},
+				"customfield_20945": []any{
+					map[string]any{"value": "DSK Bank"},
+					map[string]any{"value": "Acme Corp"},
+				},
+			},
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(payload)
+		}))
+		defer srv.Close()
+
+		mappings := []FieldMapping{
+			{Field: "Customers", Path: "fields.customfield_20945.value"},
+		}
+
+		client := NewClient(srv.URL, "user", "token")
+		issue, err := client.FetchIssue("MAINT-43", mappings)
+		if err != nil {
+			t.Fatalf("FetchIssue() unexpected error: %v", err)
+		}
+
+		if len(issue.ExtraFields) != 1 {
+			t.Fatalf("ExtraFields len = %d, want 1", len(issue.ExtraFields))
+		}
+		if got, want := issue.ExtraFields[0].Value, "DSK Bank, Acme Corp"; got != want {
+			t.Errorf("Customers = %q, want %q", got, want)
 		}
 	})
 }

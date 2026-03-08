@@ -15,6 +15,8 @@ import (
 	"github.com/codcod/maints-triage/internal/jira"
 )
 
+const defaultChecklistFile = "checklist.md"
+
 // Options controls a triage run.
 type Options struct {
 	ChecklistPath string
@@ -49,6 +51,28 @@ func triageHome() (string, error) {
 	return filepath.Join(xdgConfigHome, "triage"), nil
 }
 
+// loadFieldsMappings reads the optional fields-mapping.json from triage home.
+// If the file does not exist an empty slice is returned without error.
+func loadFieldsMappings() ([]jira.FieldMapping, error) {
+	th, err := triageHome()
+	if err != nil {
+		return nil, err
+	}
+	p := filepath.Join(th, "fields-mapping.json")
+	data, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read fields-mapping %q: %w", p, err)
+	}
+	var mappings []jira.FieldMapping
+	if err := json.Unmarshal(data, &mappings); err != nil {
+		return nil, fmt.Errorf("parse fields-mapping %q: %w", p, err)
+	}
+	return mappings, nil
+}
+
 // resolveChecklist returns the checklist path to use, in priority order:
 //  1. explicit --checklist flag value
 //  2. $TRIAGE_HOME/checklist.md  (defaults to $XDG_CONFIG_HOME/triage/checklist.md)
@@ -62,14 +86,14 @@ func resolveChecklist(explicit string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	thPath := filepath.Join(th, "checklist.md")
+	thPath := filepath.Join(th, defaultChecklistFile)
 	if _, err := os.Stat(thPath); err == nil {
 		return thPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("stat %q: %w", thPath, err)
 	}
 
-	return "checklist.md", nil
+	return defaultChecklistFile, nil
 }
 
 // Run triages one or more Jira issues and writes results to w.
@@ -84,26 +108,31 @@ func Run(issueKeys []string, cfg *config.Config, opts Options, w io.Writer) erro
 		return fmt.Errorf("read checklist %q: %w", checklistPath, err)
 	}
 
+	mappings, err := loadFieldsMappings()
+	if err != nil {
+		return err
+	}
+
 	jiraClient := jira.NewClient(cfg.JiraURL, cfg.JiraUsername, cfg.JiraAPIToken)
 
 	for _, key := range issueKeys {
 		key = strings.ToUpper(strings.TrimSpace(key))
 		_, _ = fmt.Fprintf(w, "Triaging %s...\n", key)
 
-		result := triageOne(key, checklistData, jiraClient, cfg.CursorAPIKey, opts)
+		result := triageOne(key, checklistData, mappings, jiraClient, cfg.CursorAPIKey, opts)
 		printResult(w, result, opts.OutputFormat)
 	}
 
 	return nil
 }
 
-func triageOne(key string, checklistData []byte, jiraClient *jira.Client, apiKey string, opts Options) Result {
+func triageOne(key string, checklistData []byte, mappings []jira.FieldMapping, jiraClient *jira.Client, apiKey string, opts Options) Result {
 	result := Result{
 		IssueKey:  key,
 		TriagedAt: time.Now(),
 	}
 
-	issue, err := jiraClient.FetchIssue(key)
+	issue, err := jiraClient.FetchIssue(key, mappings)
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to fetch issue: %s", err)
 		return result
@@ -122,7 +151,7 @@ func triageOne(key string, checklistData []byte, jiraClient *jira.Client, apiKey
 		return result
 	}
 
-	checklistDst := filepath.Join(workDir, "checklist.md")
+	checklistDst := filepath.Join(workDir, defaultChecklistFile)
 	if err := os.WriteFile(checklistDst, checklistData, 0o644); err != nil {
 		result.Error = fmt.Sprintf("write checklist file: %s", err)
 		return result
@@ -215,10 +244,13 @@ func writeIssueMarkdown(path string, issue *jira.Issue) error {
 	fw.printf("| Reporter          | %s |\n", issue.Reporter)
 	fw.printf("| Assignee          | %s |\n", issue.Assignee)
 	fw.printf("| Components        | %s |\n", strings.Join(issue.Components, ", "))
-	fw.printf("| Customers         | %s |\n", issue.Customers)
 	fw.printf("| Affected Versions | %s |\n", strings.Join(issue.AffectedVersions, ", "))
 	fw.printf("| Fix Versions      | %s |\n", strings.Join(issue.FixVersions, ", "))
-	fw.printf("| Labels            | %s |\n\n", strings.Join(issue.Labels, ", "))
+	fw.printf("| Labels            | %s |\n", strings.Join(issue.Labels, ", "))
+	for _, fv := range issue.ExtraFields {
+		fw.printf("| %-17s | %s |\n", fv.Field, fv.Value)
+	}
+	fw.printf("\n")
 	fw.printf("## Description\n\n%s\n\n", issue.Description)
 
 	if len(issue.Comments) > 0 {

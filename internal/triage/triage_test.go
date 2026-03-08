@@ -164,10 +164,10 @@ func TestWriteIssueMarkdown(t *testing.T) {
 		Reporter:         "Alice",
 		Assignee:         "Bob",
 		Components:       []string{"Backend", "Frontend"},
-		Customers:        "Acme Corp",
 		AffectedVersions: []string{"2.0", "2.1"},
 		FixVersions:      []string{"2.2"},
 		Labels:           []string{"bug", "regression"},
+		ExtraFields:      []jira.FieldValue{{Field: "Customers", Value: "Acme Corp"}},
 		Description:      "This is the description.",
 		Comments: []jira.Comment{
 			{Author: "Charlie", Created: "2024-01-01T10:00:00Z", Body: "Please fix ASAP."},
